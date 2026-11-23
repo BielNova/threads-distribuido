@@ -1,0 +1,93 @@
+# Sistema "Threads" distribuído — Entrega 2
+# Subir tudo:   docker compose up -d --build
+# Interface:    http://localhost:8080      RabbitMQ: http://localhost:15672 (guest/guest)
+
+x-app: &app
+  build: .
+  image: threads-distribuido:2.0
+  restart: unless-stopped
+  environment: &env
+    RABBIT_HOST: rabbitmq
+    DB_URL: jdbc:postgresql://postgres:5432/threads?reWriteBatchedInserts=true
+    DB_USER: threads
+    DB_PASS: threads
+  depends_on:
+    rabbitmq: { condition: service_healthy }
+    postgres: { condition: service_healthy }
+
+services:
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    hostname: rabbitmq            # nome fixo: o RabbitMQ guarda os dados por hostname
+    ports: ["5672:5672", "15672:15672"]
+    volumes: [rabbit-data:/var/lib/rabbitmq]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: threads
+      POSTGRES_USER: threads
+      POSTGRES_PASSWORD: threads
+    ports: ["5433:5432"]
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U threads -d threads"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # ---- 2 réplicas do gateway (produtores) atrás do nginx
+  gateway1:
+    <<: *app
+    hostname: gateway1
+    environment: { <<: *env, ROLE: gateway }
+
+  gateway2:
+    <<: *app
+    hostname: gateway2
+    environment: { <<: *env, ROLE: gateway }
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports: ["8080:80"]
+    volumes: [./nginx/nginx.conf:/etc/nginx/nginx.conf:ro]
+    depends_on: [gateway1, gateway2]
+    restart: unless-stopped
+
+  # ---- consumidores que gravam no banco (escala com --scale persistencia=N)
+  persistencia:
+    <<: *app
+    deploy:
+      replicas: 2
+    environment:
+      <<: *env
+      ROLE: persistencia
+      CONSUMIDORES: "2"
+      PREFETCH: "20"
+      ATRASO_PROCESSAMENTO_MS: ${ATRASO_MS:-0}
+      LOG_MSGS: ${LOG_MSGS:-true}
+
+  # ---- relatórios pesados (paralelismo dentro do processo)
+  analise:
+    <<: *app
+    environment: { <<: *env, ROLE: analise }
+
+  # ---- ferramentas (só rodam sob demanda: docker compose run --rm ferramentas <papel> ...)
+  ferramentas:
+    <<: *app
+    restart: "no"
+    profiles: ["ferramentas"]
+    environment: { <<: *env, ROLE: seed }
+    volumes: [./resultados:/app/resultados]
+
+volumes:
+  rabbit-data:
+  pg-data:

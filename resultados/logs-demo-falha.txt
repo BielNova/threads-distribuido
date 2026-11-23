@@ -1,0 +1,71 @@
+
+==== Falha 1: matar (kill -9) uma réplica de PERSISTÊNCIA no meio da carga ====
+>> Deixando o processamento mais lento (10 ms/msg) para a fila acumular...
+>> Enviando 3000 mensagens em segundo plano...
+    "totalMensagens": 2593,
+    "filaPendentes": 2327,
+>> docker kill threads-distribuido-persistencia-1  (SIGKILL: morre sem avisar ninguém)
+threads-distribuido-persistencia-1
+>> Fila após a queda (a outra réplica continua consumindo; as mensagens sem ack voltaram para a fila):
+    "filaPendentes": 1665,
+    "filaConsumidores": 2,
+>> Subindo a réplica de novo
+rotulo,canais,total,concorrencia,aceite_s,vazao_aceite,e2e_s,vazao_e2e,p50_ms,p95_ms,p99_ms,erros,gravadas
+demo,1,3000,30,3.18,944,13.54,222,26.0,59.9,170.5,0,3000
+RESULTADO: enviadas=3000 gravadas=3000 erros_cliente=0 -> NENHUMA MENSAGEM PERDIDA
+>> Logs: reentregas detectadas e ignoradas pela idempotência
+persistencia-1  | 01:13:31.116 [INFO] persistencia - [3f7f58dc1cd8] total gravadas=0 duplicadas_ignoradas=0 rejeitadas_dlq=0 erros_banco=0
+persistencia-1  | 01:13:37.125 [INFO] persistencia - [3f7f58dc1cd8] total gravadas=30 duplicadas_ignoradas=0 rejeitadas_dlq=0 erros_banco=0
+persistencia-1  | 01:13:39.126 [INFO] persistencia - [3f7f58dc1cd8] total gravadas=217 duplicadas_ignoradas=0 rejeitadas_dlq=0 erros_banco=0
+persistencia-1  | 01:13:44.500 [INFO] persistencia - [3f7f58dc1cd8] pronto: 2 consumidores, prefetch=20, atraso=10ms
+persistencia-2  | 01:13:46.972 [INFO] persistencia - [175444ce4991] total gravadas=1480 duplicadas_ignoradas=0 rejeitadas_dlq=0 erros_banco=0
+persistencia-1  | 01:13:46.501 [INFO] persistencia - [3f7f58dc1cd8] total gravadas=288 duplicadas_ignoradas=0 rejeitadas_dlq=0 erros_banco=0
+persistencia-2  | 01:13:48.973 [INFO] persistencia - [175444ce4991] total gravadas=1816 duplicadas_ignoradas=0 rejeitadas_dlq=0 erros_banco=0
+persistencia-1  | 01:13:48.502 [INFO] persistencia - [3f7f58dc1cd8] total gravadas=620 duplicadas_ignoradas=0 rejeitadas_dlq=0 erros_banco=0
+
+==== Falha 2: derrubar um GATEWAY durante a carga (failover no nginx) ====
+>> docker kill threads-distribuido-gateway1-1
+threads-distribuido-gateway1-1
+rotulo,canais,total,concorrencia,aceite_s,vazao_aceite,e2e_s,vazao_e2e,p50_ms,p95_ms,p99_ms,erros,gravadas
+demo,4,3000,30,3.68,815,5.54,542,31.9,70.8,133.0,0,3000
+RESULTADO: enviadas=3000 gravadas=3000 erros_cliente=0 -> NENHUMA MENSAGEM PERDIDA
+nginx-1  | 2026/11/23 01:13:54 [error] 30#30: *5231 recv() failed (104: Connection reset by peer) while reading response header from upstream, client: 172.21.0.10, server: , request: "POST /api/canais/carga-3700ab-3/mensagens HTTP/1.1", upstream: "http://172.21.0.4:8080/api/canais/carga-3700ab-3/mensagens", host: "nginx"
+nginx-1  | 2026/11/23 01:13:54 [error] 30#30: *5216 recv() failed (104: Connection reset by peer) while reading response header from upstream, client: 172.21.0.10, server: , request: "POST /api/canais/carga-3700ab-1/mensagens HTTP/1.1", upstream: "http://172.21.0.4:8080/api/canais/carga-3700ab-1/mensagens", host: "nginx"
+nginx-1  | 2026/11/23 01:13:54 [error] 30#30: *5219 recv() failed (104: Connection reset by peer) while reading response header from upstream, client: 172.21.0.10, server: , request: "POST /api/canais/carga-3700ab-3/mensagens HTTP/1.1", upstream: "http://172.21.0.4:8080/api/canais/carga-3700ab-3/mensagens", host: "nginx"
+nginx-1  | 2026/11/23 01:13:54 [error] 30#30: *5232 recv() failed (104: Connection reset by peer) while reading response header from upstream, client: 172.21.0.10, server: , request: "POST /api/canais/carga-3700ab-2/mensagens HTTP/1.1", upstream: "http://172.21.0.4:8080/api/canais/carga-3700ab-2/mensagens", host: "nginx"
+>> Subindo gateway1 de novo
+
+==== Falha 3: parar o POSTGRES por 15 s durante a carga ====
+>> docker compose stop postgres  — o gateway continua aceitando (202): as mensagens esperam na fila
+  POST com banco fora do ar -> HTTP 202
+mensagens.dlq	0	0
+mensagens.novas	1679	80
+>> docker compose start postgres
+rotulo,canais,total,concorrencia,aceite_s,vazao_aceite,e2e_s,vazao_e2e,p50_ms,p95_ms,p99_ms,erros,gravadas
+demo,2,2000,20,2.68,745,21.32,94,19.8,63.0,119.7,0,2000
+RESULTADO: enviadas=2000 gravadas=2000 erros_cliente=0 -> NENHUMA MENSAGEM PERDIDA
+>> Logs dos workers: retry com backoff enquanto o banco estava fora
+persistencia-1  | 01:14:09.166 [WARN] persistencia - Falha no banco (tentativa 3/8): db-ffa4ba3c3198 - Connection is not available, request timed out after 3000ms (total=0, active=0, idle=0, waiting=1). Retry em 800 ms
+persistencia-1  | 01:14:09.166 [WARN] persistencia - Falha no banco (tentativa 3/8): db-ffa4ba3c3198 - Connection is not available, request timed out after 3001ms (total=0, active=0, idle=0, waiting=0). Retry em 800 ms
+persistencia-1  | 01:14:12.968 [WARN] persistencia - Falha no banco (tentativa 4/8): db-ffa4ba3c3198 - Connection is not available, request timed out after 3001ms (total=0, active=0, idle=0, waiting=1). Retry em 1600 ms
+persistencia-1  | 01:14:12.968 [WARN] persistencia - Falha no banco (tentativa 4/8): db-ffa4ba3c3198 - Connection is not available, request timed out after 3002ms (total=0, active=0, idle=0, waiting=0). Retry em 1600 ms
+persistencia-1  | 01:14:17.572 [WARN] persistencia - Falha no banco (tentativa 5/8): db-ffa4ba3c3198 - Connection is not available, request timed out after 3000ms (total=0, active=0, idle=0, waiting=1). Retry em 3200 ms
+persistencia-1  | 01:14:17.574 [WARN] persistencia - Falha no banco (tentativa 5/8): db-ffa4ba3c3198 - Connection is not available, request timed out after 3002ms (total=0, active=0, idle=0, waiting=0). Retry em 3200 ms
+
+==== Falha 4: REINICIAR o RabbitMQ com mensagens na fila (filas duráveis + mensagens persistentes) ====
+>> Parando os consumidores para as mensagens ficarem acumuladas no broker
+mensagens.novas	200
+>> docker compose restart rabbitmq
+>> Depois do restart as 200 mensagens continuam na fila:
+mensagens.novas	200
+>> Religando os consumidores
+       canal       | count 
+-------------------+-------
+ broker-1795396464 |   200
+(1 row)
+
+
+==== Consistência geral após as falhas ====
+    "totalMensagens": 10205,
+    "consistente": true,
+    "dlq": 0

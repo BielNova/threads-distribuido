@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Threads distribuído</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --tx:#1d2330; --mut:#677085; --bd:#e2e5ea; --ac:#2f6fed; --ok:#1f9d55; --err:#d64545; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171c; --card:#1d2128; --tx:#e7eaf0; --mut:#98a1b3; --bd:#2c323c; --ac:#6b9bff; --ok:#3ccf7f; --err:#ff6b6b; } }
+  * { box-sizing:border-box }
+  body { margin:0; font:15px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--tx) }
+  header { padding:16px 20px; border-bottom:1px solid var(--bd); display:flex; gap:12px; align-items:baseline; flex-wrap:wrap }
+  header h1 { font-size:18px; margin:0 } header span { color:var(--mut); font-size:13px }
+  main { display:grid; grid-template-columns: 1fr 360px; gap:16px; padding:16px 20px; max-width:1200px; margin:auto }
+  @media (max-width: 860px) { main { grid-template-columns:1fr } }
+  .card { background:var(--card); border:1px solid var(--bd); border-radius:10px; padding:14px }
+  .card h2 { font-size:14px; margin:0 0 10px; color:var(--mut); text-transform:uppercase; letter-spacing:.04em }
+  #feed { height:420px; overflow:auto; display:flex; flex-direction:column; gap:6px }
+  .msg { padding:6px 8px; border-radius:6px; border:1px solid var(--bd) }
+  .msg b { margin-right:6px } .msg small { color:var(--mut); font-size:12px; margin-left:6px }
+  .msg button { float:right; font-size:12px; padding:2px 8px }
+  form, .row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap }
+  input, select, button { font:inherit; padding:7px 10px; border-radius:7px; border:1px solid var(--bd); background:var(--bg); color:var(--tx) }
+  input[name=texto] { flex:1; min-width:140px }
+  button { background:var(--ac); color:#fff; border:none; cursor:pointer } button.sec { background:transparent; color:var(--ac); border:1px solid var(--ac) }
+  pre { white-space:pre-wrap; font-size:12px; margin:0; max-height:300px; overflow:auto }
+  .ok { color:var(--ok) } .err { color:var(--err) }
+  #log { font-size:12px; color:var(--mut); max-height:120px; overflow:auto }
+</style>
+</head>
+<body>
+<header>
+  <h1>Threads — chat distribuído</h1>
+  <span>gateway × 2 → RabbitMQ → persistência × N → Postgres · tempo real via SSE</span>
+</header>
+<main>
+  <section class="card">
+    <h2>Canal <select id="canal"><option>geral</option><option>projeto</option><option>historico</option></select></h2>
+    <div id="feed"></div>
+    <form id="envio">
+      <input name="usuario" placeholder="usuário" value="X" size="8" required>
+      <input name="texto" placeholder="mensagem" required autocomplete="off">
+      <button>Enviar</button>
+    </form>
+    <div class="row">
+      <button class="sec" id="rajada">Rajada: X, Y e Z enviando 100 msgs cada ao mesmo tempo</button>
+    </div>
+    <div id="log"></div>
+  </section>
+  <aside style="display:flex; flex-direction:column; gap:16px">
+    <section class="card">
+      <h2>Consistência</h2>
+      <pre id="stats">carregando…</pre>
+      <div class="row"><button class="sec" id="atualizar">Atualizar</button></div>
+    </section>
+    <section class="card">
+      <h2>Relatório paralelo do canal</h2>
+      <div class="row">
+        <label>threads <input id="threads" type="number" value="8" min="1" max="64" style="width:70px"></label>
+        <button id="relatorio">Gerar</button>
+      </div>
+      <pre id="rel" style="margin-top:10px"></pre>
+    </section>
+  </aside>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const canal = () => $('#canal').value;
+const log = t => { $('#log').insertAdjacentHTML('afterbegin', `<div>${new Date().toLocaleTimeString()} — ${t}</div>`); };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function render(m) {
+  let el = document.getElementById('m-' + m.id);
+  const html = `<button class="sec" data-id="${m.id}" data-v="${m.versao}">editar</button>
+    <b>#${m.seq} ${esc(m.usuario)}</b>${esc(m.texto)}<small>v${m.versao} · ${esc(m.processadaPor || '')}</small>`;
+  if (el) { el.innerHTML = html; return; }
+  el = document.createElement('div'); el.className = 'msg'; el.id = 'm-' + m.id; el.innerHTML = html;
+  const feed = $('#feed'); const fundo = feed.scrollTop + feed.clientHeight >= feed.scrollHeight - 30;
+  feed.appendChild(el); while (feed.children.length > 300) feed.firstChild.remove();
+  if (fundo) feed.scrollTop = feed.scrollHeight;
+}
+
+async function carregar() {
+  $('#feed').innerHTML = '';
+  const r = await fetch(`/api/canais/${canal()}/mensagens?limite=100`);
+  (await r.json()).forEach(render);
+  $('#feed').scrollTop = $('#feed').scrollHeight;
+}
+
+async function stats() {
+  const r = await fetch('/api/stats');
+  const s = await r.json();
+  s.canais = s.canais.filter(c => !c.canal.startsWith('carga-')).concat(
+    s.canais.some(c => c.canal.startsWith('carga-')) ? [{canal: 'carga-* (benchmark)', mensagens: s.canais.filter(c => c.canal.startsWith('carga-')).reduce((a, c) => a + c.mensagens, 0)}] : []);
+  $('#stats').innerHTML = `<span class="${s.consistente ? 'ok' : 'err'}">${s.consistente ? '✔ sequências 1..N sem buracos nem repetição' : '✘ INCONSISTENTE'}</span>\n` +
+    `servido por: ${r.headers.get('X-Gateway')}\n` + esc(JSON.stringify(s, null, 1));
+}
+
+async function enviar(usuario, texto, c = canal()) {
+  const r = await fetch(`/api/canais/${c}/mensagens`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({usuario, texto})});
+  if (r.status !== 202) log(`<span class="err">erro ${r.status}</span>`);
+  return r;
+}
+
+$('#envio').onsubmit = async e => {
+  e.preventDefault(); const f = e.target;
+  const r = await enviar(f.usuario.value, f.texto.value);
+  if (r.status === 202) log(`aceita (202) por ${r.headers.get('X-Gateway')}`);
+  f.texto.value = '';
+};
+
+$('#rajada').onclick = async () => {
+  const t0 = performance.now(), c = canal();
+  // a mesma ideia da Main da Parte 1 (t1, t2, t3), agora com 3 "usuários" concorrentes pela rede
+  await Promise.all(['X', 'Y', 'Z'].map(async u => { for (let i = 1; i <= 100; i++) await enviar(u, `msg ${i} de ${u}`, c); }));
+  log(`300 mensagens aceitas em ${Math.round(performance.now() - t0)} ms`);
+  setTimeout(stats, 1500);
+};
+
+$('#feed').onclick = async e => {
+  const b = e.target.closest('button[data-id]'); if (!b) return;
+  const texto = prompt('Novo texto:'); if (!texto) return;
+  const r = await fetch(`/api/mensagens/${b.dataset.id}`, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({texto, versao: Number(b.dataset.v)})});
+  const j = await r.json();
+  log(r.status === 409 ? `<span class="err">409 conflito: versão atual é ${j.versaoAtual}</span>` : `editada → v${j.versao}`);
+};
+
+$('#relatorio').onclick = async () => {
+  const r = await fetch(`/api/canais/${canal()}/relatorios`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({threads: Number($('#threads').value), comparar: true})});
+  const {id} = await r.json();
+  $('#rel').textContent = 'na fila… ' + id;
+  const poll = async () => {
+    const rr = await (await fetch('/api/relatorios/' + id)).json();
+    if (rr.status !== 'CONCLUIDO') { $('#rel').textContent = rr.status + '…'; return setTimeout(poll, 500); }
+    $('#rel').textContent = JSON.stringify(rr.resultado, null, 1);
+  };
+  poll();
+};
+
+$('#canal').onchange = carregar;
+$('#atualizar').onclick = stats;
+
+const es = new EventSource('/api/stream');
+es.onmessage = ev => { const m = JSON.parse(ev.data); if (m.canal === canal()) render(m); };
+es.onerror = () => log('stream caiu — reconectando (o navegador tenta sozinho)…');
+
+carregar(); stats();
+</script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+threads,media_ms,desvio_ms,min_ms,speedup,eficiencia_pct,resultado_igual_ao_sequencial
+1,6512.1,154.3,6404.8,1.00,100.0,true
+2,3804.7,126.1,3708.1,1.71,85.6,true
+4,2575.0,99.8,2482.3,2.53,63.2,true
+6,2440.4,313.0,2173.9,2.67,44.5,true
+8,2019.9,100.4,1906.7,3.22,40.3,true
+10,2214.6,185.9,1972.0,2.94,29.4,true
