@@ -35,7 +35,8 @@
 </header>
 <main>
   <section class="card">
-    <h2>Canal <select id="canal"><option>geral</option><option>projeto</option><option>historico</option></select></h2>
+    <h2>Canal <select id="canal"><option>geral</option></select>
+      <button class="sec" id="novoCanal" style="text-transform:none; margin-left:6px">+ novo canal</button></h2>
     <div id="feed"></div>
     <form id="envio">
       <input name="usuario" placeholder="usuário" value="X" size="8" required>
@@ -137,14 +138,42 @@ $('#relatorio').onclick = async () => {
   poll();
 };
 
+// ---- canais: a lista vem do banco; um canal novo passa a existir com a 1ª mensagem
+function adicionarOpcao(nome, selecionar) {
+  const sel = $('#canal');
+  if (![...sel.options].some(o => o.value === nome)) sel.add(new Option(nome, nome));
+  if (selecionar) sel.value = nome;
+}
+
+async function carregarCanais() {
+  const atual = canal();
+  const lista = await (await fetch('/api/canais')).json();
+  lista.forEach(c => adicionarOpcao(c.nome));
+  $('#canal').value = atual;
+}
+
+$('#novoCanal').onclick = () => {
+  const nome = (prompt('Nome do novo canal (letras, números, - ou _):') || '').trim().toLowerCase();
+  if (!nome) return;
+  if (!/^[a-z0-9_-]{1,40}$/.test(nome)) return alert('Nome inválido: use só letras, números, - ou _ (até 40).');
+  adicionarOpcao(nome, true);
+  carregar();
+  log(`canal <b>${esc(nome)}</b> selecionado — ele é criado no banco quando a 1ª mensagem chegar`);
+  document.querySelector('#envio [name=texto]').focus();
+};
+
 $('#canal').onchange = carregar;
 $('#atualizar').onclick = stats;
 
 const es = new EventSource('/api/stream');
-es.onmessage = ev => { const m = JSON.parse(ev.data); if (m.canal === canal()) render(m); };
+es.onmessage = ev => {
+  const m = JSON.parse(ev.data);
+  if (!m.canal.startsWith('carga-') && !m.canal.startsWith('broker-')) adicionarOpcao(m.canal); // canal criado por outra pessoa aparece na lista
+  if (m.canal === canal()) render(m);
+};
 es.onerror = () => log('stream caiu — reconectando (o navegador tenta sozinho)…');
 
-carregar(); stats();
+carregarCanais().then(carregar); stats();
 </script>
 </body>
 </html>

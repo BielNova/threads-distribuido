@@ -99,6 +99,8 @@ public class GatewayServer {
                 pedirRelatorio(ex, p[3]);
             } else if (p.length == 4 && p[2].equals("relatorios") && metodo.equals("GET")) {
                 verRelatorio(ex, p[3]);
+            } else if (p.length == 3 && p[2].equals("canais") && metodo.equals("GET")) {
+                listarCanais(ex);
             } else if (p.length == 3 && p[2].equals("stats")) {
                 stats(ex);
             } else if (p.length == 3 && p[2].equals("stream")) {
@@ -190,6 +192,22 @@ public class GatewayServer {
      * GET /api/stats — contadores + VERIFICAÇÃO DE CONSISTÊNCIA por canal:
      * para estar consistente, cada canal precisa ter seq = 1..N sem buraco nem repetição.
      */
+    /**
+     * GET /api/canais — lista os canais existentes (para a interface montar o seletor).
+     * Não existe "criar canal" separado: o canal nasce junto com a primeira mensagem
+     * (INSERT ... ON CONFLICT DO NOTHING no worker de persistência).
+     */
+    private static void listarCanais(HttpExchange ex) throws Exception {
+        List<Map<String, Object>> lista = new ArrayList<>();
+        try (var c = db.getConnection(); PreparedStatement ps = c.prepareStatement(
+                "SELECT nome, ultimo_seq FROM canais WHERE nome NOT LIKE 'carga-%' AND nome NOT LIKE 'broker-%' ORDER BY nome")) {
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) lista.add(Map.of("nome", rs.getString(1), "mensagens", rs.getLong(2)));
+            }
+        }
+        responder(ex, 200, lista);
+    }
+
     private static void stats(HttpExchange ex) throws Exception {
         Map<String, Object> r = new LinkedHashMap<>();
         List<Map<String, Object>> canais = new ArrayList<>();

@@ -38,7 +38,7 @@ docker compose up -d --build
 
 | Endereço | O quê |
 |---|---|
-| http://localhost:8080 | interface do chat (enviar, editar, rajada X/Y/Z, relatório paralelo, painel de consistência) |
+| http://localhost:8080 | interface do chat (criar canais, enviar, editar, rajada X/Y/Z, relatório paralelo, painel de consistência) |
 | http://localhost:15672 | painel do RabbitMQ (guest / guest) |
 | `localhost:5433` | Postgres (threads / threads) |
 
